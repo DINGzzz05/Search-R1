@@ -120,3 +120,11 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 log/
 
 **logs
+
+# 自己的文件
+data/
+dataset/
+env/
+huggingface/
+retriever/
+tmp_ray/
