@@ -2,16 +2,12 @@
 
 # =========================
 # Search-R1 Conservative Stable Config (4x RTX 4090 24GB)
-# 目标：
-# 1. 优先稳定跑通，避免 W&B crashed
-# 2. 降低 vLLM / Ray / FSDP 资源冲突
-# 3. 控制长上下文导致的 KV Cache 爆炸
 # =========================
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export DATA_DIR='data/nq_search'
 
-# Ray 临时目录（避免 /tmp 爆）
+# Ray 临时目录
 export RAY_TMPDIR='/data/zmx/SEARCH_R1/tmp_ray'
 
 # HuggingFace 镜像与缓存
@@ -25,15 +21,15 @@ export WAND_PROJECT='Search-R1'
 # 模型（保守版建议先用 3B）
 # =========================
 export BASE_MODEL='Qwen/Qwen2.5-3B'
-export EXPERIMENT_NAME='nq-search-r1-grpo-qwen2.5-3b-conservative'
+export EXPERIMENT_NAME="nq-search-r1-alpha-${SEARCH_PENALTY_ALPHA}"
 
 # vLLM 后端
 export VLLM_ATTENTION_BACKEND=XFORMERS
 
-# 可选：减少 CUDA 内存碎片
+# 减少 CUDA 内存碎片
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# 可选：NCCL 更稳（4090 无 NVLink）
+# NCCL
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
@@ -50,7 +46,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     data.val_batch_size=128 \
     \
     `# =========================` \
-    `# 长度大幅缩减（最关键）` \
+    `# 长度大幅缩减` \
     `# =========================` \
     data.max_prompt_length=2048 \
     data.max_response_length=128 \
@@ -88,14 +84,14 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     ++actor_rollout_ref.actor.ppo_micro_batch_size=4 \
     \
     `# =========================` \
-    `# FSDP（保守：仅保留参数卸载）` \
+    `# FSDP` \
     `# =========================` \
     actor_rollout_ref.actor.fsdp_config.param_offload=true \
     actor_rollout_ref.actor.fsdp_config.grad_offload=false \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
     \
     `# =========================` \
-    `# Rollout（最关键：n_agent降到2）` \
+    `# Rollout` \
     `# =========================` \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
@@ -138,5 +134,6 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     max_turns=2 \
     retriever.url="http://127.0.0.1:8000/retrieve" \
     retriever.topk=1 \
+    reward.search_penalty_alpha=0.02 \
     \
     2>&1 | tee ${EXPERIMENT_NAME}.log

@@ -33,10 +33,11 @@ class RewardManager():
     """The reward manager.
     """
 
-    def __init__(self, tokenizer, num_examine, format_score=0.) -> None:
+    def __init__(self, tokenizer, num_examine, format_score=0., search_penalty_alpha=0.0) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.format_score = format_score
+        self.search_penalty_alpha = search_penalty_alpha
 
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
@@ -75,7 +76,15 @@ class RewardManager():
             data_source = data_item.non_tensor_batch['data_source']
             compute_score_fn = _select_rm_score_fn(data_source)
 
-            score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=self.format_score)
+            # 加入：search_count_stats 作为一个惩罚项，鼓励模型在更少的搜索次数下给出正确答案
+            answer_score = compute_score_fn(
+                solution_str=sequences_str,
+                ground_truth=ground_truth,
+                format_score=self.format_score
+            )
+            search_count = data_item.non_tensor_batch['search_count_stats']
+            # 惩罚项的权重
+            score = answer_score - self.search_penalty_alpha * search_count
 
             reward_tensor[i, valid_response_length - 1] = score
             # all_scores.append(score)
@@ -180,7 +189,7 @@ def main_task(config):
         role_worker_mapping[Role.RewardModel] = ray.remote(RewardModelWorker)
         mapping[Role.RewardModel] = global_pool_id
 
-    reward_fn = RewardManager(tokenizer=tokenizer, num_examine=0)
+    reward_fn = RewardManager(tokenizer=tokenizer, num_examine=0, search_penalty_alpha=config.reward.search_penalty_alpha)
 
     # Note that we always use function-based RM for validation
     val_reward_fn = RewardManager(tokenizer=tokenizer, num_examine=1)
