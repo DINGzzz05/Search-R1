@@ -227,6 +227,8 @@ class LLMGenerationManager:
         turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_action_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_search_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
+        # 加入：search_count_stats 用于统计每条数据进行了多少次搜索
+        search_count_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
 
@@ -260,6 +262,7 @@ class LLMGenerationManager:
             turns_stats[curr_active_mask] += 1
             valid_action_stats += torch.tensor(valid_action, dtype=torch.int)
             valid_search_stats += torch.tensor(is_search, dtype=torch.int)
+            search_count_stats += torch.tensor(is_search, dtype=torch.int)
 
             next_obs_ids = self._process_next_obs(next_obs)
             
@@ -302,6 +305,7 @@ class LLMGenerationManager:
             active_num_list.append(active_mask.sum().item())
             valid_action_stats += torch.tensor(valid_action, dtype=torch.int)
             valid_search_stats += torch.tensor(is_search, dtype=torch.int)
+            search_count_stats += torch.tensor(is_search, dtype=torch.int)
             
 
             original_right_side = self._update_right_side(
@@ -313,6 +317,7 @@ class LLMGenerationManager:
         meta_info['active_mask'] = active_mask.tolist()
         meta_info['valid_action_stats'] = valid_action_stats.tolist()
         meta_info['valid_search_stats'] = valid_search_stats.tolist()
+        meta_info['search_count_stats'] = search_count_stats.tolist()
         
         print("ACTIVE_TRAJ_NUM:", active_num_list)
         
@@ -345,8 +350,16 @@ class LLMGenerationManager:
             final_output['attention_mask']
         )
         
-        final_output = DataProto.from_dict(final_output)
-        final_output.meta_info.update(meta_info)
+        # 加入 search_count_stats 到 meta_info 中，以便后续计算奖励时使用
+        non_tensors = {
+            'search_count_stats': meta_info['search_count_stats']
+        }
+
+        final_output = DataProto.from_dict(
+            tensors=final_output,
+            non_tensors=non_tensors,
+            meta_info=meta_info
+        )
         
         return final_output
 
