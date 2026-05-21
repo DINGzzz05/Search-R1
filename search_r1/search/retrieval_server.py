@@ -31,8 +31,55 @@ def read_jsonl(file_path):
             data.append(json.loads(line))
     return data
 
+import re
+
+MAX_DOC_CHARS = 256
+
+def clean_text(text):
+    # 去 HTML 标签
+    text = re.sub(r'<[^>]+>', ' ', text)
+
+    # 去 URL
+    text = re.sub(r'http\S+', ' ', text)
+
+    # 去多余空白
+    text = re.sub(r'\s+', ' ', text)
+
+    # 去常见 prompt/template 污染
+    text = text.replace("Question:", " ")
+    text = text.replace("Answer:", " ")
+    text = text.replace("<|im_start|>", " ")
+    text = text.replace("<|im_end|>", " ")
+
+    return text.strip()
+
+
 def load_docs(corpus, doc_idxs):
-    results = [corpus[int(idx)] for idx in doc_idxs]
+    results = []
+
+    for idx in doc_idxs:
+
+        raw_doc = corpus[int(idx)]
+
+        # 避免直接修改 datasets 原对象
+        doc = dict(raw_doc)
+
+        # 清洗并截断 text
+        if "text" in doc and isinstance(doc["text"], str):
+
+            cleaned_text = clean_text(doc["text"])
+
+            doc["text"] = cleaned_text[:MAX_DOC_CHARS]
+
+        # 清洗并截断 contents
+        if "contents" in doc and isinstance(doc["contents"], str):
+
+            cleaned_contents = clean_text(doc["contents"])
+
+            doc["contents"] = cleaned_contents[:MAX_DOC_CHARS]
+
+        results.append(doc)
+
     return results
 
 def load_model(model_path: str, use_fp16: bool = False):
@@ -40,6 +87,7 @@ def load_model(model_path: str, use_fp16: bool = False):
     model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
     model.eval()
     model.cuda()
+    model.half()
     if use_fp16: 
         model = model.half()
     tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True, trust_remote_code=True)
