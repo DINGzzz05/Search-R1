@@ -123,8 +123,8 @@ log/
 
 # 自己的文件
 data/
-dataset/
+dataset_cache/
 env/
-huggingface/
-retriever/
+huggingface_cache/
+retriever_env/
 tmp_ray/
