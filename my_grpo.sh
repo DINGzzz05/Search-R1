@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # =========================
 # 配置：
 # Search-R1 Conservative Stable Config (4x RTX 4090 24GB)
@@ -141,5 +140,6 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     retriever.topk=1 \
     +reward.search_penalty_alpha=0.01 \
     +reward.evidence_beta=0.2 \
+    +reward.thinking_quality_weight=0.03 \
     \
     2>&1 | tee ${EXPERIMENT_NAME}.log

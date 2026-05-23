@@ -29,20 +29,54 @@ def _select_rm_score_fn(data_source):
         raise NotImplementedError
 
 
+def compute_thinking_quality(text: str) -> float:
+    """
+    启发式评估 <think> 标签内推理过程的质量。
+    返回 0~1 之间的分数（0表示无思考或不满足任何规则，1表示全部满足）。
+    """
+    # 提取所有 <think> 块
+    think_blocks = re.findall(r'<think>(.*?)</think>', text, re.DOTALL)
+    if not think_blocks:
+        return 0.0
+
+    # 合并所有思考块
+    thinking = ' '.join(think_blocks)
+
+    score = 0.0
+
+    # 规则1：证据利用 —— 提到了搜索结果或引用编号
+    if re.search(r'Search Result|\[[\d]+\]', thinking):
+        score += 0.34
+
+    # 规则2：逻辑结构 —— 包含逻辑连接词（中/英文）
+    logic_markers = [
+        '因此', '所以', '然而', '但是', '首先', '其次', '然后', '最后',
+        'therefore', 'however', 'first', 'second', 'finally', 'because', 'thus'
+    ]
+    if any(marker in thinking.lower() for marker in logic_markers):
+        score += 0.33
+
+    # 规则3：搜索反思 —— 主动计划下一步搜索或承认信息不足
+    if re.search(r'need to search|需要搜索|缺乏|not enough info|信息不足|let me search|i need to find', thinking.lower()):
+        score += 0.33
+
+    return min(score, 1.0)
+
+
 # 奖励管理器
 class RewardManager():
     """The reward manager.
     """
 
-    def __init__(self, tokenizer, num_examine, format_score=0., search_penalty_alpha=0.0,
-                 evidence_beta=0.0, no_citation_penalty=-0.5) -> None:
-        self.tokenizer = tokenizer
-        self.num_examine = num_examine
-        self.format_score = format_score
-        self.search_penalty_alpha = search_penalty_alpha
-        # 证据奖励权重与无引用惩罚值
-        self.evidence_beta = evidence_beta
-        self.no_citation_penalty = no_citation_penalty
+def __init__(self, tokenizer, num_examine, format_score=0., search_penalty_alpha=0.0,
+             evidence_beta=0.0, no_citation_penalty=-0.5, thinking_quality_weight=0.03) -> None:
+    self.tokenizer = tokenizer
+    self.num_examine = num_examine
+    self.format_score = format_score
+    self.search_penalty_alpha = search_penalty_alpha
+    self.evidence_beta = evidence_beta
+    self.no_citation_penalty = no_citation_penalty
+    self.thinking_quality_weight = thinking_quality_weight  # 新增的思考质量权重
 
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
@@ -90,6 +124,10 @@ class RewardManager():
 
             # 基础分数：答案得分 + 搜索次数惩罚
             score = answer_score - self.search_penalty_alpha * search_count
+
+            # 思考质量奖励（过程监督）
+            thinking_bonus = compute_thinking_quality(sequences_str)
+            score += self.thinking_quality_weight * thinking_bonus
 
             # ---- 证据奖励 ----
             answer_text = final_answers[i]
