@@ -1,7 +1,12 @@
 #!/bin/bash
 
 # =========================
+# 配置：
 # Search-R1 Conservative Stable Config (4x RTX 4090 24GB)
+# 常用命令：
+# 1. 训练：conda activate searchr1 && bash my_grpo.sh
+# 2. 启动检索服务器：conda activate retriever && bash retrieval_launch.sh
+# 3. 实时显卡监控（只看显存）：watch -n 1 nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits
 # =========================
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -18,7 +23,7 @@ export HUGGINGFACE_HUB_CACHE=/data/zmx/SEARCH_R1/huggingface_cache
 export WAND_PROJECT='Search-R1'
 
 # =========================
-# 模型（保守版建议先用 3B）
+# 模型
 # =========================
 export BASE_MODEL='Qwen/Qwen2.5-3B'
 export EXPERIMENT_NAME="nq-search-r1-alpha-${SEARCH_PENALTY_ALPHA}"
@@ -40,7 +45,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     data.val_data_num=null \
     \
     `# =========================` \
-    `# Batch 保守缩小` \
+    `# Batch` \
     `# =========================` \
     data.train_batch_size=16 \
     data.val_batch_size=128 \
@@ -79,7 +84,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.state_masking=true \
     \
-    `# PPO Batch 缩小` \
+    `# PPO Batch` \
     ++actor_rollout_ref.actor.ppo_mini_batch_size=16 \
     ++actor_rollout_ref.actor.ppo_micro_batch_size=4 \
     \
@@ -134,6 +139,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     max_turns=2 \
     retriever.url="http://127.0.0.1:8000/retrieve" \
     retriever.topk=1 \
-    reward.search_penalty_alpha=0.02 \
+    +reward.search_penalty_alpha=0.01 \
+    +reward.evidence_beta=0.2 \
     \
     2>&1 | tee ${EXPERIMENT_NAME}.log

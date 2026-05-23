@@ -788,7 +788,7 @@ class RayPPOTrainer(object):
                         reward_tensor = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor
 
-                        # compute rewards. apply_kl_penalty if available
+                        # 计算reward shaping的惩罚项，鼓励模型在更少的搜索次数下给出正确答案
                         if not self.config.actor_rollout_ref.actor.use_kl_loss:
                             batch, kl_metrics = apply_kl_penalty(batch,
                                                                  kl_ctrl=self.kl_ctrl,

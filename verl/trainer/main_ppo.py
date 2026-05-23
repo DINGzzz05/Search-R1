@@ -29,15 +29,20 @@ def _select_rm_score_fn(data_source):
         raise NotImplementedError
 
 
+# 奖励管理器
 class RewardManager():
     """The reward manager.
     """
 
-    def __init__(self, tokenizer, num_examine, format_score=0., search_penalty_alpha=0.0) -> None:
+    def __init__(self, tokenizer, num_examine, format_score=0., search_penalty_alpha=0.0,
+                 evidence_beta=0.0, no_citation_penalty=-0.5) -> None:
         self.tokenizer = tokenizer
-        self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
+        self.num_examine = num_examine
         self.format_score = format_score
         self.search_penalty_alpha = search_penalty_alpha
+        # 证据奖励权重与无引用惩罚值
+        self.evidence_beta = evidence_beta
+        self.no_citation_penalty = no_citation_penalty
 
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
@@ -48,7 +53,9 @@ class RewardManager():
 
         reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
 
-        # all_scores = []
+        # 从 meta_info 中提取证据奖励所需的字段
+        final_answers = data.meta_info.get('final_answers', [''] * len(data))
+        retrieved_docs = data.meta_info.get('retrieved_docs', [{}] * len(data))
 
         already_print_data_sources = {}
 
@@ -56,9 +63,7 @@ class RewardManager():
             data_item = data[i]  # DataProtoItem
 
             prompt_ids = data_item.batch['prompts']
-
             prompt_length = prompt_ids.shape[-1]
-
             valid_prompt_length = data_item.batch['attention_mask'][:prompt_length].sum()
             valid_prompt_ids = prompt_ids[-valid_prompt_length:]
 
@@ -76,18 +81,31 @@ class RewardManager():
             data_source = data_item.non_tensor_batch['data_source']
             compute_score_fn = _select_rm_score_fn(data_source)
 
-            # 加入：search_count_stats 作为一个惩罚项，鼓励模型在更少的搜索次数下给出正确答案
             answer_score = compute_score_fn(
                 solution_str=sequences_str,
                 ground_truth=ground_truth,
                 format_score=self.format_score
             )
             search_count = data_item.non_tensor_batch['search_count_stats']
-            # 惩罚项的权重
+
+            # 基础分数：答案得分 + 搜索次数惩罚
             score = answer_score - self.search_penalty_alpha * search_count
 
+            # ---- 证据奖励 ----
+            answer_text = final_answers[i]
+            docs = retrieved_docs[i]
+            if answer_text and docs:   # 确保该轨迹有最终回答和文档记录
+                # 导入证据奖励函数（放在文件顶部也可以）
+                from path.to.evidence import compute_evidence_reward
+                ev_score, no_cite_pen = compute_evidence_reward(
+                    answer_text,
+                    docs,
+                    no_citation_penalty=self.no_citation_penalty
+                )
+                score += self.evidence_beta * ev_score + no_cite_pen
+            # -------------------
+
             reward_tensor[i, valid_response_length - 1] = score
-            # all_scores.append(score)
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
@@ -95,16 +113,8 @@ class RewardManager():
             if already_print_data_sources[data_source] < self.num_examine:
                 already_print_data_sources[data_source] += 1
                 print(sequences_str)
-        
-        # print(f"[DEBUG] all_scores: {all_scores}")
-        # print(f"[DEBUG] all_scores shape: {np.array(all_scores).shape}")
-        # print(f"[DEBUG] all_scores mean: {np.mean(all_scores)}")
-        # print(f"[DEBUG] all_scores max: {np.max(all_scores)}")
-        # print(f"[DEBUG] all_scores min: {np.min(all_scores)}")
-        # print(f"[DEBUG] all_scores std: {np.std(all_scores)}")
 
         return reward_tensor
-
 
 import ray
 import hydra

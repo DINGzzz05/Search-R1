@@ -75,7 +75,7 @@ class LLMGenerationManager:
         return responses, responses_str
 
     def _process_next_obs(self, next_obs: List[str]) -> torch.Tensor:
-        """Process next observations from environment."""
+        """将环境交互得到的下一步观察进行tokenize，并处理长度超过模型输入限制的情况。"""
         
         next_obs_ids = self.tokenizer(
             next_obs, 
@@ -231,8 +231,9 @@ class LLMGenerationManager:
         search_count_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
-
-        # Main generation loop
+        # 加入：定义一个列表，用于存储每条数据的检索到的文档信息，初始为batch_size个空字典
+        all_retrieved_docs = [{} for _ in range(gen_batch.batch['input_ids'].shape[0])]
+        # rollout
         for step in range(self.config.max_turns):
             if not active_mask.sum():
                 break
@@ -251,10 +252,29 @@ class LLMGenerationManager:
             responses_ids, responses_str = self._postprocess_responses(gen_output.batch['responses'])
             responses_ids, responses_str = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
 
-            # Execute in environment and process observations
-            next_obs, dones, valid_action, is_search = self.execute_predictions(
+            # 执行环境交互，获取下一步观察、done标志、动作有效性和是否为搜索操作
+            next_obs, dones, valid_action, is_search, retrieved_docs_list = self.execute_predictions(
                 responses_str, self.tokenizer.pad_token, active_mask
             )
+
+            # 新增：格式化观察并累积文档：Search Result [1]: ...
+            active_indices = active_mask.nonzero(as_tuple=True)[0].tolist()
+            formatted_obs = []                    # 用于存放处理后的观察文本
+            for local_idx, global_idx in enumerate(active_indices):
+                if is_search[local_idx]:
+                    doc_text = retrieved_docs_list[local_idx]  # 已经是字符串
+                    if doc_text:  # 非空时才分配编号并格式化
+                        new_id = int(search_count_stats[global_idx].item()) + 1
+                        obs_parts = [f"Search Result [{new_id}]: {doc_text}"]
+                        all_retrieved_docs[global_idx][new_id] = doc_text
+                        formatted_obs.append("\n".join(obs_parts))
+                    else:
+                        formatted_obs.append(next_obs[local_idx])
+                else:
+                    formatted_obs.append(next_obs[local_idx])
+
+            # 用格式化后的观察替换原列表
+            next_obs = formatted_obs
             
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
@@ -266,7 +286,7 @@ class LLMGenerationManager:
 
             next_obs_ids = self._process_next_obs(next_obs)
             
-            # Update states
+            # 更新每条数据的检索到的文档信息
             rollings = self._update_rolling_state(
                 rollings,
                 responses_ids,
@@ -296,7 +316,7 @@ class LLMGenerationManager:
             responses_ids, responses_str = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
 
             # # Execute in environment and process observations
-            _, dones, valid_action, is_search = self.execute_predictions(
+            _, dones, valid_action, is_search, _ = self.execute_predictions(
                 responses_str, self.tokenizer.pad_token, active_mask, do_search=False
             )
 
@@ -318,6 +338,9 @@ class LLMGenerationManager:
         meta_info['valid_action_stats'] = valid_action_stats.tolist()
         meta_info['valid_search_stats'] = valid_search_stats.tolist()
         meta_info['search_count_stats'] = search_count_stats.tolist()
+        # 记录最终回答（对齐 active_mask）
+        meta_info['final_answers'] = responses_str
+        meta_info['retrieved_docs'] = all_retrieved_docs
         
         print("ACTIVE_TRAJ_NUM:", active_num_list)
         
@@ -365,7 +388,7 @@ class LLMGenerationManager:
 
     def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_search=True) -> List[str]:
         """
-        Execute predictions across multiple environments.
+        执行LLM的预测结果，并根据预测的动作类型与环境进行交互，获取下一步观察、done标志、动作有效性、是否为搜索操作以及检索到的文档信息。
         NOTE: the function is the actual `step` function in the environment
         NOTE penalty_for_invalid is not included in observation shown to the LLM
         
@@ -378,7 +401,7 @@ class LLMGenerationManager:
             List of observation strings
         """
         cur_actions, contents = self.postprocess_predictions(predictions)
-        next_obs, dones, valid_action, is_search = [], [], [], []
+        next_obs, dones, valid_action, is_search,retrieved_docs = [], [], [], [], []
         
         search_queries = [content for action, content in zip(cur_actions, contents) if action == 'search']
         if do_search:
@@ -394,17 +417,21 @@ class LLMGenerationManager:
                 dones.append(1)
                 valid_action.append(0)
                 is_search.append(0)
+                retrieved_docs.append('')          # 非活跃，空字符串
             else:
                 if action == 'answer':
                     next_obs.append('')
                     dones.append(1)
                     valid_action.append(1)
                     is_search.append(0)
+                    retrieved_docs.append('')      # 回答动作，无文档
                 elif action == 'search':
-                    next_obs.append(f'\n\n<information>{search_results.pop(0).strip()}</information>\n\n')
+                    doc_text = search_results.pop(0).strip()
+                    next_obs.append(f'\n\n<information>{doc_text}</information>\n\n')
                     dones.append(0)
                     valid_action.append(1)
                     is_search.append(1)
+                    retrieved_docs.append(doc_text)  # 关键：保存原始文档
                 else:
                     next_obs.append(f'\nMy previous action is invalid. \
 If I want to search, I should put the query between <search> and </search>. \
@@ -412,10 +439,11 @@ If I want to give the final answer, I should put the answer between <answer> and
                     dones.append(0)
                     valid_action.append(0)
                     is_search.append(0)
+                    retrieved_docs.append('')
             
         assert len(search_results) == 0
             
-        return next_obs, dones, valid_action, is_search
+        return next_obs, dones, valid_action, is_search, retrieved_docs
 
     def postprocess_predictions(self, predictions: List[Any]) -> Tuple[List[int], List[bool]]:
         """
